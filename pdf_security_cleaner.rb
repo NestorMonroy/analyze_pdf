@@ -13,26 +13,57 @@ end
 def deep_clean_pdf(input_file, output_file)
   $logger.info("Limpieza profunda de #{input_file}")
   doc = HexaPDF::Document.open(input_file)
+  risk_score = 0
+  risk_factors = []
+
   doc.pages.each do |page|
-    deep_clean_page(page)
+    page_risks = deep_clean_page(page)
+    risk_score += page_risks.size
+    risk_factors.concat(page_risks)
   end
-  clean_document_catalog(doc)
+
+  catalog_risks = clean_document_catalog(doc)
+  risk_score += catalog_risks.size
+  risk_factors.concat(catalog_risks)
+
+  risk_factors.uniq!
+  $logger.info("Factores de riesgo encontrados: #{risk_factors.join(', ')}")
+  $logger.info("Puntuación de riesgo: #{risk_score}")
+
   doc.write(output_file, optimize: true)
   $logger.info("PDF limpio guardado como #{output_file}")
+  
+  [risk_score, risk_factors]
 end
 
 def deep_clean_page(page)
-  page.delete(:Annots)
-  page.delete(:AA)
-  page.delete(:JS)
+  risks = []
+  if page[:Annots]
+    page.delete(:Annots)
+    risks << "Annots"
+  end
+  if page[:AA]
+    page.delete(:AA)
+    risks << "AA"
+  end
+  if page[:JS]
+    page.delete(:JS)
+    risks << "JS"
+  end
+  risks
 end
 
 def clean_document_catalog(doc)
   root = doc.catalog
   keys_to_remove = [:Names, :OpenAction, :AA, :AcroForm, :Outlines, :JavaScript]
+  risks = []
   keys_to_remove.each do |key|
-    root.delete(key)
+    if root.key?(key)
+      root.delete(key)
+      risks << key.to_s
+    end
   end
+  risks
 end
 
 def sanitize_with_hexapdf(input_file, output_file)
@@ -48,6 +79,16 @@ def sanitize_with_hexapdf(input_file, output_file)
     
     # Optimizar el documento
     doc.config['optimize_objects'] = true
+    
+    # Eliminar todos los JavaScript y acciones
+    doc.each do |obj|
+      if obj.kind_of?(HexaPDF::Dictionary)
+        obj.delete(:JS)
+        obj.delete(:JavaScript)
+        obj.delete(:AA)
+        obj.delete(:A)
+      end
+    end
     
     # Escribir el documento optimizado
     doc.write(output_file, optimize: true)
@@ -67,14 +108,22 @@ def clean_pdf(input_file)
   output_file = "#{base_name}_limpio.pdf"
 
   # Paso 1: Limpieza profunda con HexaPDF
-  deep_clean_pdf(input_file, temp_file1)
+  risk_score, risk_factors = deep_clean_pdf(input_file, temp_file1)
 
   # Paso 2: Sanitizar con HexaPDF
   if sanitize_with_hexapdf(temp_file1, temp_file2)
     # Paso 3: Segunda pasada de limpieza profunda
-    deep_clean_pdf(temp_file2, output_file)
+    final_risk_score, final_risk_factors = deep_clean_pdf(temp_file2, output_file)
     File.delete(temp_file1)
     File.delete(temp_file2)
+    
+    if final_risk_score > 0
+      $logger.warn("Atención: Aún se detectan factores de riesgo después de la limpieza.")
+      $logger.warn("Factores de riesgo restantes: #{final_risk_factors.join(', ')}")
+      $logger.warn("Puntuación de riesgo final: #{final_risk_score}")
+    else
+      $logger.info("Todos los factores de riesgo conocidos han sido eliminados.")
+    end
   else
     $logger.warn("Usando el resultado de la primera limpieza como salida final")
     FileUtils.mv(temp_file1, output_file)
