@@ -8,62 +8,38 @@ from PyPDF2 import PdfReader, PdfWriter
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-def deep_clean_pdf(input_file, output_file):
-    logging.info(f"Limpieza profunda de {input_file}")
+def remove_js_and_aa(input_file, output_file):
+    logging.info(f"Procesando {input_file}")
     
     reader = PdfReader(input_file)
     writer = PdfWriter()
 
     for page in reader.pages:
-        clean_page = deep_clean_page(page)
-        writer.add_page(clean_page)
+        writer.add_page(page)
 
-    # Limpiar el catálogo del documento
-    clean_document_catalog(writer)
+    # Eliminar JavaScript y Acciones Automáticas
+    writer.remove_links()
+    for page in writer.pages:
+        if "/AA" in page:
+            del page["/AA"]
+        if "/Annots" in page:
+            annotations = page["/Annots"]
+            for annotation in annotations:
+                if "/A" in annotation:
+                    del annotation["/A"]
 
-    with open(output_file, 'wb') as f:
-        writer.write(f)
-
-    logging.info(f"PDF limpio guardado como {output_file}")
-
-def deep_clean_page(page):
-    # Eliminar todas las anotaciones
-    if "/Annots" in page:
-        del page["/Annots"]
-    
-    # Eliminar acciones automáticas de la página
-    if "/AA" in page:
-        del page["/AA"]
-    
-    # Eliminar JavaScript incrustado en la página
-    if "/JS" in page:
-        del page["/JS"]
-    
-    # Limpiar el contenido de la página
-    if "/Contents" in page:
-        content = page["/Contents"].get_object()
-        if isinstance(content, bytes):
-            clean_content = remove_js_from_content(content)
-            page["/Contents"] = clean_content
-    
-    return page
-
-def clean_document_catalog(writer):
+    # Eliminar JavaScript y Acciones del catálogo del documento
     if "/Names" in writer._root_object:
         del writer._root_object["/Names"]
     if "/OpenAction" in writer._root_object:
         del writer._root_object["/OpenAction"]
     if "/AA" in writer._root_object:
         del writer._root_object["/AA"]
-    if "/AcroForm" in writer._root_object:
-        del writer._root_object["/AcroForm"]
-    if "/Outlines" in writer._root_object:
-        del writer._root_object["/Outlines"]
 
-def remove_js_from_content(content):
-    # Esta función es un placeholder. En la práctica, necesitaríamos un parser
-    # de contenido PDF para eliminar JavaScript de manera segura.
-    return content
+    with open(output_file, 'wb') as f:
+        writer.write(f)
+
+    logging.info(f"PDF limpio guardado como {output_file}")
 
 def sanitize_with_qpdf(input_file, output_file):
     logging.info(f"Sanitizando {input_file} con qpdf")
@@ -82,24 +58,18 @@ def sanitize_with_qpdf(input_file, output_file):
 
 def clean_pdf(input_file):
     base_name = os.path.splitext(input_file)[0]
-    temp_file1 = f"{base_name}_temp1.pdf"
-    temp_file2 = f"{base_name}_temp2.pdf"
+    temp_file = f"{base_name}_temp.pdf"
     output_file = f"{base_name}_limpio.pdf"
 
-    # Paso 1: Limpieza profunda con PyPDF2
-    deep_clean_pdf(input_file, temp_file1)
+    # Paso 1: Remover JS y AA con PyPDF2
+    remove_js_and_aa(input_file, temp_file)
 
     # Paso 2: Sanitizar con qpdf
-    if sanitize_with_qpdf(temp_file1, temp_file2):
-        # Paso 3: Segunda pasada de limpieza profunda
-        deep_clean_pdf(temp_file2, output_file)
-        os.remove(temp_file1)
-        os.remove(temp_file2)
+    if sanitize_with_qpdf(temp_file, output_file):
+        os.remove(temp_file)
     else:
-        logging.warning("Usando el resultado de la primera limpieza como salida final")
-        os.rename(temp_file1, output_file)
-        if os.path.exists(temp_file2):
-            os.remove(temp_file2)
+        logging.warning("Usando el resultado de PyPDF2 como salida final")
+        os.rename(temp_file, output_file)
 
     logging.info("Proceso de limpieza completado")
 
