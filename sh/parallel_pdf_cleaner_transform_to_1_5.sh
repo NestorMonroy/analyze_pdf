@@ -80,6 +80,17 @@ log_message() {
 
     # Guardar en el archivo de log sin colores
     echo -e "$log_entry" | sed 's/\x1b\[[0-9;]*m//g' >> "$ARCHIVO_LOG"
+
+    echo -e "$log_entry" | tee -a "$ARCHIVO_LOG"
+    
+    # Añadir logging adicional para diagnóstico
+    if [[ "$nivel" == "ERROR" || "$nivel" == "WARN" ]]; then
+        echo "Contenido del directorio temporal:" >> "$ARCHIVO_LOG"
+        ls -l "$temp_dir" >> "$ARCHIVO_LOG" 2>&1
+        echo "Tamaño del archivo de entrada: $(du -h "$input_file" | cut -f1)" >> "$ARCHIVO_LOG"
+        echo "Tamaño del archivo de salida: $(du -h "$temp_output" 2>/dev/null | cut -f1)" >> "$ARCHIVO_LOG"
+    fi
+
 }
 
 check_pdf_files() {
@@ -325,11 +336,20 @@ apply_cleaning_methods() {
                     cp "$current_file" "$temp_output"
                 fi
                 ;;
-           "eliminar_aa")
-                if ! qpdf --remove-page-piece-dict "$current_file" --replace-input 2>/dev/null; then
-                    log_message "WARN" "Fallo al intentar eliminar AA con qpdf. Continuando con el siguiente método." "$input_file" "limpieza_$step"
-                else
+            "eliminar_aa")
+                local temp_aa_output="${temp_dir}/temp_aa_${step_counter}.pdf"
+                if qpdf --remove-page-piece-dict "$current_file" "$temp_aa_output" 2>/dev/null; then
                     log_message "INFO" "AA eliminadas con qpdf" "$input_file" "limpieza_$step"
+                    mv "$temp_aa_output" "$temp_output"
+                else
+                    log_message "WARN" "Fallo al intentar eliminar AA con qpdf. Continuando con el archivo original." "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"
+                fi
+                
+                # Verificar si el archivo de salida existe y no está vacío
+                if [ ! -f "$temp_output" ] || [ ! -s "$temp_output" ]; then
+                    log_message "ERROR" "Archivo de salida no creado o vacío en el paso $step" "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"  # Usar el archivo original si algo falla
                 fi
                 ;;
             "eliminar_aa_sed")
@@ -344,21 +364,32 @@ apply_cleaning_methods() {
         
         if [ ! -f "$temp_output" ] || [ ! -s "$temp_output" ]; then
             log_message "ERROR" "Archivo de salida no creado o vacío en el paso $step" "$input_file" "limpieza_$step"
-            error_occurred=true
-            break
+            if [ "$step" != "eliminar_aa" ]; then  # Ya manejamos este caso específicamente
+                cp "$current_file" "$temp_output"  # Usar el archivo original si algo falla
+            fi
+        else
+            current_file="$temp_output"
         fi
-        
-        log_message "INFO" "Método de limpieza $step completado" "$input_file" "limpieza_$step"
-        current_file="$temp_output"
     done
     
-    if [ "$error_occurred" = false ]; then
+   if [ "$error_occurred" = false ]; then
         cp "$current_file" "$output_file"
         log_message "INFO" "Todos los métodos de limpieza aplicados" "$input_file" "limpieza_completa"
         return 0
     else
         log_message "ERROR" "Proceso de limpieza fallido" "$input_file" "limpieza_completa"
         return 1
+    fi
+
+    if [ "$error_occurred" = true ]; then
+        log_message "WARN" "Intentando reconstruir el PDF" "$input_file" "reconstruccion"
+        reconstruct_pdf "$current_file" "$temp_output"
+        if [ $? -eq 0 ]; then
+            log_message "INFO" "Reconstrucción del PDF exitosa" "$input_file" "reconstruccion"
+        else
+            log_message "ERROR" "Fallo en la reconstrucción del PDF" "$input_file" "reconstruccion"
+            cp "$current_file" "$temp_output"
+        fi
     fi
 
     # verify_aa_removal
@@ -401,6 +432,11 @@ verify_aa_removal() {
 
 # Función principal para limpiar un PDF
 clean_pdf() {
+
+    if ! check_permissions_and_space "$DIRECTORIO_SALIDA"; then
+        return 1
+    fi
+
     local input_file="$1"
     local base_name=$(basename "$input_file" .pdf)
     local temp_dir="${DIRECTORIO_SALIDA}/${base_name}_temp"
@@ -503,6 +539,20 @@ clean_pdf() {
 
 }
 
+reconstruct_pdf() {
+    local input_file="$1"
+    local output_file="$2"
+    
+    # Extraer páginas individuales
+    pdftk "$input_file" burst output "${temp_dir}/page_%04d.pdf"
+    
+    # Reconstruir el PDF sin JavaScript
+    pdftk "${temp_dir}"/page_*.pdf cat output "$output_file"
+    
+    # Limpiar archivos temporales
+    rm "${temp_dir}"/page_*.pdf
+}
+
 verificar_permisos() {
     local directorios=("$DIRECTORIO_SALIDA" "$DIRECTORIO_ESTADO")
     for dir in "${directorios[@]}"; do
@@ -524,6 +574,21 @@ verificar_permisos() {
     return 0
 }
 
+check_permissions_and_space() {
+    local dir="$1"
+    if [ ! -w "$dir" ]; then
+        log_message "ERROR" "No se tienen permisos de escritura en $dir" "$input_file" "verificacion"
+        return 1
+    fi
+    
+    local free_space=$(df -k "$dir" | awk 'NR==2 {print $4}')
+    if [ "$free_space" -lt 1048576 ]; then  # Menos de 1GB libre
+        log_message "ERROR" "Espacio insuficiente en disco en $dir" "$input_file" "verificacion"
+        return 1
+    fi
+    
+    return 0
+}
 # Función de procesamiento para cada subshell
 process_pdfs() {
     while read -r pdf_file; do
