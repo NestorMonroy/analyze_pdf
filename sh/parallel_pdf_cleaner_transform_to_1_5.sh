@@ -17,24 +17,80 @@ TEMP_DIR=$(mktemp -d)
 FIFO="$TEMP_DIR/pdf_fifo"
 
 
-# Función para logging
+
+# Definir códigos de color
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+shorten_filename() {
+    local filename="$1"
+    local max_length=50  # Ajusta este valor según tus preferencias
+    if [ ${#filename} -gt $max_length ]; then
+        echo "${filename:0:$((max_length-3))}..."
+    else
+        echo "$filename"
+    fi
+}
+
+
 log_message() {
     local nivel="${1:-INFO}"
     local mensaje="${2:-No message provided}"
     local archivo="${3:-}"
     local etapa="${4:-}"
     local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-    local log_entry="[$timestamp] [$nivel]"
-   
+    local log_entry="[$timestamp]"
+    local color=""
+
+    # Asignar color según el nivel de log
+    case $nivel in
+        "ERROR")   color="$RED" ;;
+        "WARN")    color="$YELLOW" ;;
+        "INFO")    color="$GREEN" ;;
+        "DEBUG")   color="$BLUE" ;;
+        *)         color="$NC" ;;
+    esac
+
+    log_entry+=" [${color}${nivel}${NC}]"
+
+    if [[ -n "$archivo" ]]; then
+        local short_filename=$(shorten_filename "$archivo")
+        log_entry+=" [Archivo: $short_filename]"
+    fi
+
     if [[ -n "$archivo" ]]; then
         log_entry+=" [Archivo: $archivo]"
     fi
     if [[ -n "$etapa" ]]; then
         log_entry+=" [Etapa: $etapa]"
     fi
-   
+    
     log_entry+=" $mensaje"
-    echo "$log_entry" | tee -a "$ARCHIVO_LOG"
+
+    # Imprimir en la consola con colores si es una terminal
+    if [ -t 1 ]; then
+        echo -e "$log_entry"
+    else
+        # Eliminar códigos de color si la salida no es a una terminal
+        echo -e "$log_entry" | sed 's/\x1b\[[0-9;]*m//g'
+    fi
+
+    # Guardar en el archivo de log sin colores
+    echo -e "$log_entry" | sed 's/\x1b\[[0-9;]*m//g' >> "$ARCHIVO_LOG"
+}
+
+check_pdf_files() {
+    local pdf_count=$(find "$@" -type f -name "*.pdf" | wc -l)
+    
+    if [ "$pdf_count" -eq 0 ]; then
+        log_message "ERROR" "No se encontraron archivos PDF para procesar. Terminando el script."
+        exit 1
+    else
+        log_message "INFO" "Se encontraron $pdf_count archivos PDF para procesar."
+    fi
 }
 
 
@@ -187,44 +243,128 @@ apply_cleaning_methods() {
     local output_file="$2"
     local temp_dir="$3"
     
-    local cleaning_steps=("optimizar" "aplanar" "eliminar_js" "reimprimir")
+    local cleaning_steps=(
+        "optimizar"
+        "eliminar_aa"
+        "eliminar_aa_sed"        
+        "aplanar_metadatos"
+        "aplanar_pdftk"
+        "eliminar_js"
+        "reimprimir"
+    )
+    
     local current_file="$input_file"
+    local step_counter=0
+    local error_occurred=false
     
     for step in "${cleaning_steps[@]}"; do
+        step_counter=$((step_counter + 1))
+        local temp_output="$temp_dir/temp_${step_counter}.pdf"
+        
         log_message "INFO" "Aplicando método de limpieza: $step" "$input_file" "limpieza_$step"
         
-        local temp_output="$temp_dir/temp_$step.pdf"
         case $step in
             "optimizar")
-                qpdf "$current_file" --object-streams=generate --compress-streams=y --decode-level=specialized "$temp_output"
+                if ! qpdf "$current_file" --object-streams=disable --compress-streams=y --decode-level=specialized "$temp_output" 2>/dev/null; then
+                    log_message "WARN" "Fallo en el método de limpieza: $step. Continuando con el archivo original." "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"
+                fi
                 ;;
-            "aplanar")
-                qpdf "$current_file" --remove-page-labels --flatten-annotations=all --generate-appearances "$temp_output"
+            "aplanar_metadatos")
+                if ! qpdf "$current_file" --remove-page-labels --flatten-annotations=all --generate-appearances "$temp_output" 2>/dev/null; then
+                    log_message "WARN" "Fallo en el método de limpieza: $step. Continuando con el archivo original." "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"
+                fi
+                ;;
+            "aplanar_pdftk")
+                if ! pdftk "$current_file" output "$temp_output" flatten 2>/dev/null; then
+                    log_message "WARN" "Fallo al aplanar con pdftk. Continuando con el archivo original." "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"
+                else
+                    log_message "INFO" "PDF aplanado con pdftk" "$input_file" "limpieza_$step"
+                fi
                 ;;
             "eliminar_js")
-                qpdf "$current_file" --remove-javascript --remove-reset-form --remove-all-actions "$temp_output"
+                cp "$current_file" "$temp_output"
+                local qdf_output
+                if qdf_output=$(qpdf --qdf --replace-input "$temp_output" 2>&1); then
+                    log_message "INFO" "Conversión a formato QDF exitosa" "$input_file" "limpieza_$step"
+                    if sed -i '/\/JS/d; /\/JavaScript/d; /\/AA/d; /\/OpenAction/d' "$temp_output"; then
+                        log_message "INFO" "Eliminación de referencias a JavaScript y acciones completada" "$input_file" "limpieza_$step"
+                        
+                        # Verificar si el archivo fue modificado
+                        if ! diff -q "$current_file" "$temp_output" >/dev/null 2>&1; then
+                            log_message "INFO" "Se detectaron y eliminaron elementos de JavaScript o acciones" "$input_file" "limpieza_$step"
+                        else
+                            log_message "INFO" "No se encontraron elementos de JavaScript o acciones para eliminar" "$input_file" "limpieza_$step"
+                        fi
+                        
+                        local linearize_output
+                        if linearize_output=$(qpdf --linearize --replace-input "$temp_output" 2>&1); then
+                            log_message "INFO" "Linearización exitosa" "$input_file" "limpieza_$step"
+                        else
+                            log_message "WARN" "Fallo en la linearización después de eliminar JavaScript y acciones. Continuando con el archivo sin linearizar." "$input_file" "limpieza_$step"
+                            log_message "DEBUG" "Error de linearización: $linearize_output" "$input_file" "limpieza_$step"
+                        fi
+                    else
+                        log_message "ERROR" "Fallo al intentar eliminar referencias a JavaScript y acciones" "$input_file" "limpieza_$step"
+                        cp "$current_file" "$temp_output"
+                    fi
+                else
+                    log_message "WARN" "Fallo en la conversión a formato QDF. Continuando con el archivo original." "$input_file" "limpieza_$step"
+                    log_message "DEBUG" "Error de conversión QDF: $qdf_output" "$input_file" "limpieza_$step"
+                    cp "$current_file" "$temp_output"
+                fi
                 ;;
             "reimprimir")
                 if ! gs -sDEVICE=pdfwrite -dPDFSETTINGS=/default -dNOPAUSE -dQUIET -dBATCH \
                    -dCompatibilityLevel=1.5 \
                    -sOutputFile="$temp_output" \
-                   "$current_file"; then
-                    log_message "WARN" "Fallo en el método de limpieza: reimprimir. Omitiendo este paso." "$input_file" "limpieza_reimprimir"
+                   "$current_file" 2>/dev/null; then
+                    log_message "WARN" "Fallo en el método de limpieza: $step. Continuando con el archivo original." "$input_file" "limpieza_$step"
                     cp "$current_file" "$temp_output"
+                fi
+                ;;
+           "eliminar_aa")
+                if ! qpdf --remove-page-piece-dict "$current_file" --replace-input 2>/dev/null; then
+                    log_message "WARN" "Fallo al intentar eliminar AA con qpdf. Continuando con el siguiente método." "$input_file" "limpieza_$step"
+                else
+                    log_message "INFO" "AA eliminadas con qpdf" "$input_file" "limpieza_$step"
+                fi
+                ;;
+            "eliminar_aa_sed")
+                cp "$current_file" "$temp_output"
+                if sed -i '/\/AA/d; /\/A <<.*>>/d; /\/A \[.*\]/d' "$temp_output"; then
+                    log_message "INFO" "AA eliminadas con sed" "$input_file" "limpieza_$step"
+                else
+                    log_message "WARN" "Fallo al intentar eliminar AA con sed" "$input_file" "limpieza_$step"
                 fi
                 ;;
         esac
         
         if [ ! -f "$temp_output" ] || [ ! -s "$temp_output" ]; then
             log_message "ERROR" "Archivo de salida no creado o vacío en el paso $step" "$input_file" "limpieza_$step"
-            return 1
+            error_occurred=true
+            break
         fi
         
+        log_message "INFO" "Método de limpieza $step completado" "$input_file" "limpieza_$step"
         current_file="$temp_output"
     done
     
-    cp "$current_file" "$output_file"
-    log_message "INFO" "Todos los métodos de limpieza aplicados" "$input_file" "limpieza_completa"
+    if [ "$error_occurred" = false ]; then
+        cp "$current_file" "$output_file"
+        log_message "INFO" "Todos los métodos de limpieza aplicados" "$input_file" "limpieza_completa"
+        return 0
+    else
+        log_message "ERROR" "Proceso de limpieza fallido" "$input_file" "limpieza_completa"
+        return 1
+    fi
+
+    # verify_aa_removal
+    if ! verify_aa_removal "$output_file"; then
+        log_message "ERROR" "La eliminación de AA no fue completamente exitosa" "$input_file" "verificacion"
+    fi
 }
 
 verify_pdf_integrity() {
@@ -239,12 +379,25 @@ verify_pdf_integrity() {
         return 1
     fi
     
-    # Añadir más verificaciones según sea necesario
+    # Verificar que no se hayan introducido ObjStm
+    local objstm_count=$(pdfid "$output_file" | grep "/ObjStm" | awk '{print $2}')
+    if [ "$objstm_count" -gt 0 ]; then
+        log_message "WARN" "Se detectaron $objstm_count Object Streams en el archivo limpio" "$input_file" "verificacion"
+    fi
     
     log_message "INFO" "Verificación de integridad exitosa" "$input_file" "verificacion"
     return 0
 }
 
+verify_aa_removal() {
+    local file="$1"
+    if grep -q "/AA" "$file" || grep -q "/A <<" "$file" || grep -q "/A \[" "$file"; then
+        log_message "WARN" "Se detectaron AA residuales en el archivo" "$file" "verificacion"
+        return 1
+    fi
+    log_message "INFO" "No se detectaron AA residuales" "$file" "verificacion"
+    return 0
+}
 
 # Función principal para limpiar un PDF
 clean_pdf() {
@@ -261,31 +414,65 @@ clean_pdf() {
     local checksum=$(echo $estado_actual | cut -d':' -f2)
     
     case $estado in
-        "no_iniciado")
+        "no_iniciado"|"analisis_pre")
             analyze_pdf "$input_file" "$ARCHIVO_ANALISIS_PRE" "analisis_pre"
+            if [ $? -ne 0 ]; then
+                log_message "ERROR" "Fallo en el análisis pre-limpieza" "$input_file" "analisis_pre"
+                return 1
+            fi
             local initial_checksum=$(calculate_checksum "$input_file")
             set_estado "$input_file" "analisis_pre" "$initial_checksum"
             ;&  # Fall through
-        "analisis_pre")
+        "reparacion")
             local repaired_file="${temp_dir}/${base_name}_repaired.pdf"
             repair_pdf "$input_file" "$repaired_file"
+            if [ $? -ne 0 ]; then
+                log_message "ERROR" "Fallo en la reparación del PDF" "$input_file" "reparacion"
+                return 1
+            fi
+            set_estado "$input_file" "reparado" $(calculate_checksum "$repaired_file")
             ;&
-        "reparado")
+        "transformacion")
             local version=$(pdfinfo "$repaired_file" | grep "PDF version" | awk '{print $3}')
             log_message "INFO" "Versión del PDF: $version" "$input_file" "version_check"
+            local transformed_file="${temp_dir}/${base_name}_transformed.pdf"
             if [ "$version" != "1.5" ]; then
-                local transformed_file="${temp_dir}/${base_name}_transformed.pdf"
                 transform_to_1_5 "$repaired_file" "$transformed_file"
+                if [ $? -ne 0 ]; then
+                    log_message "ERROR" "Fallo en la transformación a PDF 1.5" "$input_file" "transformacion"
+                    return 1
+                fi
             else
-                local transformed_file="$repaired_file"
-                set_estado "$input_file" "transformado" $(calculate_checksum "$transformed_file")
+                cp "$repaired_file" "$transformed_file"
             fi
+            set_estado "$input_file" "transformado" $(calculate_checksum "$transformed_file")
             ;&
-        "transformado"|"optimizar"|"aplanar"|"eliminar_js")
-            apply_cleaning_methods "$transformed_file" "$output_file" "$temp_dir"
+        "limpieza")
+            local cleaned_file="${temp_dir}/${base_name}_cleaned.pdf"
+            apply_cleaning_methods "$transformed_file" "$cleaned_file" "$temp_dir"
+            if [ $? -ne 0 ]; then
+                log_message "ERROR" "Fallo en la aplicación de métodos de limpieza" "$input_file" "limpieza"
+                return 1
+            fi
+            set_estado "$input_file" "limpiado" $(calculate_checksum "$cleaned_file")
             ;&
-        "reimprimir")
+        "verificacion")
+            if ! verify_pdf_integrity "$input_file" "$cleaned_file"; then
+                log_message "ERROR" "Fallo en la verificación de integridad del PDF" "$input_file" "verificacion"
+                return 1
+            fi
+            if ! verify_aa_removal "$cleaned_file"; then
+                log_message "WARN" "Se detectaron AA residuales en el archivo limpio" "$input_file" "verificacion"
+            fi
+            cp "$cleaned_file" "$output_file"
+            set_estado "$input_file" "verificado" $(calculate_checksum "$output_file")
+            ;&
+        "analisis_post")
             analyze_pdf "$output_file" "$ARCHIVO_ANALISIS_POST" "analisis_post"
+            if [ $? -ne 0 ]; then
+                log_message "ERROR" "Fallo en el análisis post-limpieza" "$input_file" "analisis_post"
+                return 1
+            fi
             set_estado "$input_file" "completado" $(calculate_checksum "$output_file")
             ;;
         "completado")
@@ -296,6 +483,7 @@ clean_pdf() {
                 log_message "WARN" "Archivo final no íntegro, reiniciando proceso" "$input_file" "reinicio"
                 set_estado "$input_file" "no_iniciado" ""
                 clean_pdf "$input_file"
+                return $?
             fi
             ;;
         *)
@@ -304,19 +492,15 @@ clean_pdf() {
             ;;
     esac
     
-    # Usar esta función después de apply_cleaning_methods en clean_pdf
-    if ! verify_pdf_integrity "$input_file" "$output_file"; then
-        log_message "ERROR" "Fallo en la verificación de integridad. Revirtiendo a la versión original." "$input_file" "verificacion"
-        cp "$input_file" "$output_file"
-        return 1
-    fi
-    if [ ! -f "$output_file" ] || [ ! -s "$output_file" ]; then
+    if [ -f "$output_file" ] && [ -s "$output_file" ]; then
+        log_message "INFO" "Limpieza completada con éxito" "$input_file" "fin"
+        rm -rf "$temp_dir"
+        return 0
+    else
         log_message "ERROR" "Archivo de salida no creado o vacío" "$input_file" "fin"
         return 1
     fi
-    
-    log_message "INFO" "Limpieza completada con éxito" "$input_file" "fin"
-    rm -rf "$temp_dir"
+
 }
 
 verificar_permisos() {
@@ -379,6 +563,7 @@ cleanup() {
     exit 1
 }
 
+
 ## Declarar array asociativo para PIDs
 declare -A pids_en_ejecucion
 
@@ -398,7 +583,16 @@ trap cleanup SIGINT SIGTERM
 main() {
     log_message "INFO" "Iniciando proceso de limpieza de PDFs"
     
-    # Iniciar contenido de archivos de log y análisis
+    # Verificar permisos
+    if ! verificar_permisos; then
+        log_message "ERROR" "No se tienen los permisos necesarios para ejecutar el script."
+        exit 1
+    fi
+    
+    # Verificar si hay archivos PDF para procesar
+    check_pdf_files "$@"
+    
+    # Iniciar archivos de log y análisis
     echo "Inicio del proceso de análisis y limpieza de PDFs: $(date)" > "$ARCHIVO_LOG"
     echo "PDFs transformados a versión 1.5:" > "$ARCHIVO_TRANSFORMADOS"
     echo "Análisis de PDFs antes de la limpieza:" > "$ARCHIVO_ANALISIS_PRE"
