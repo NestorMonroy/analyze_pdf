@@ -9,13 +9,14 @@ class CompletePDFCleaner
     @logger.formatter = proc do |severity, datetime, progname, msg|
       "[#{datetime.strftime('%Y-%m-%d %H:%M:%S')}] #{severity}: #{msg}\n"
     end
+    @output_folder = create_output_folder
   end
 
   def clean_pdf(input_file)
     base_name = File.basename(input_file, ".*")
-    temp_file1 = "#{base_name}_temp1.pdf"
-    temp_file2 = "#{base_name}_temp2.pdf"
-    output_file = "#{base_name}_limpio.pdf"
+    temp_file1 = File.join(@output_folder, "#{base_name}_temp1.pdf")
+    temp_file2 = File.join(@output_folder, "#{base_name}_temp2.pdf")
+    output_file = File.join(@output_folder, "#{base_name}_limpio.pdf")
 
     # Paso 1: Limpieza profunda con HexaPDF
     risk_score, risk_factors = deep_clean_pdf(input_file, temp_file1)
@@ -34,7 +35,7 @@ class CompletePDFCleaner
       File.delete(temp_file2) if File.exist?(temp_file2)
     end
 
-    @logger.info("Proceso de limpieza completado")
+    @logger.info("Proceso de limpieza completado. Archivo guardado en: #{output_file}")
   end
 
   def deep_clean_pdf(input_file, output_file)
@@ -116,6 +117,14 @@ class CompletePDFCleaner
   end
 
   private
+
+  def create_output_folder
+    timestamp = Time.now.strftime("%Y%m%d_%H%M%S")
+    output_folder = File.join(Dir.pwd, "PDFs_limpios_#{timestamp}")
+    FileUtils.mkdir_p(output_folder)
+    @logger.info("Carpeta de salida creada: #{output_folder}")
+    output_folder
+  end
 
   def deep_clean_page(page)
     risks = []
