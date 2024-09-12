@@ -97,7 +97,6 @@ if __FILE__ == $0
       options[:output_folder] = folder
     end
     
-    
     opts.on("-h", "--help", "Mostrar este mensaje de ayuda") do
       puts opts
       exit
