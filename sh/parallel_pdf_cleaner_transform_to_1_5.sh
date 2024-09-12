@@ -282,7 +282,8 @@ apply_cleaning_methods() {
                 fi
                 ;;
             "aplanar_metadatos")
-                if ! qpdf "$current_file" --remove-page-labels --flatten-annotations=all --generate-appearances "$temp_output" 2>/dev/null; then
+            # --remove-page-labels --generate-appearances   --flatten-annotations=all no exite
+                if ! qpdf "$current_file" --flatten-annotations=all  "$temp_output" 2>/dev/null; then
                     log_message "WARN" "Fallo en el método de limpieza: $step. Continuando con el archivo original." "$input_file" "limpieza_$step"
                     cp "$current_file" "$temp_output"
                 fi

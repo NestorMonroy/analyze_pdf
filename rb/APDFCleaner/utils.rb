@@ -152,4 +152,43 @@ module Utils
       raise "#{file} no es un PDF válido."
     end
   end
+
+  def self.sanitize_filename(filename)
+    filename.gsub(/[^0-9A-Za-z.]/, '_')
+  end
+
+  def self.rename_pdf_file(file, logger = nil)
+    dir = File.dirname(file)
+    filename = File.basename(file)
+    newname = filename.dup
+
+    patterns = [
+      '_limpio',
+      '_unlockedlimpio',
+      'limpio',
+      '__unlocked',
+      'Lulu.com'
+    ]
+
+    patterns.each do |pattern|
+      newname.gsub!(/#{Regexp.escape(pattern)}(\.pdf)?$/, '.pdf')
+      newname.gsub!(pattern, '')
+    end
+
+    if filename != newname
+      newpath = File.join(dir, sanitize_filename(newname))
+      begin
+        FileUtils.mv(file, newpath)
+        message = "Renombrado: #{file} -> #{newpath}"
+        logger ? logger.info(message) : puts(message)
+        return newpath
+      rescue => e
+        error_message = "Error al renombrar #{file}: #{e.message}"
+        logger ? logger.error(error_message) : puts(error_message)
+      end
+    end
+
+    file  # Devuelve el nombre original si no se renombró
+  end
+
 end

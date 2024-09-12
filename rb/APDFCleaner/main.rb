@@ -15,7 +15,7 @@ class AdvancedPDFCleaner
     @cleaner = PDFCleaner.new(@logger, options[:verbose])
     @external_cleaner = ExternalToolCleaner.new(@logger, options[:verbose])
     @risk_checker = RiskChecker.new(@logger, options[:verbose])
-   
+    @rename_files = true
    
     check_permissions
   end
@@ -60,6 +60,10 @@ class AdvancedPDFCleaner
       # Paso 5: Verificación final de riesgos
       @risk_checker.check_risks(output_file)
 
+      # Paso 6: Renombrar archivo (ahora siempre se ejecuta)
+      renamed_file = Utils.rename_pdf_file(output_file, @logger)
+      output_file = renamed_file if renamed_file
+
       # Limpieza de archivos temporales
       Utils.delete_file(temp_file1)
       Utils.delete_file(temp_file2)
@@ -88,11 +92,12 @@ if __FILE__ == $0
     opts.on("-v", "--verbose", "Ejecutar en modo verbose") do
       options[:verbose] = true
     end
-
+    
     opts.on("-o", "--output FOLDER", "Especificar carpeta de salida") do |folder|
       options[:output_folder] = folder
     end
-
+    
+    
     opts.on("-h", "--help", "Mostrar este mensaje de ayuda") do
       puts opts
       exit
@@ -107,6 +112,7 @@ if __FILE__ == $0
   end
 
   cleaner = AdvancedPDFCleaner.new(options)
+  
   input_files = ARGV.select do |file|
     begin
       Utils.validate_pdf_file(file)
