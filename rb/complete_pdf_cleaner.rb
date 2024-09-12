@@ -35,7 +35,7 @@ class CompletePDFCleaner
       File.delete(temp_file2) if File.exist?(temp_file2)
     end
 
-    @logger.info("Proceso de limpieza completado. Archivo guardado en: #{output_file}")
+    @logger.info("Proceso de limpieza completado")
   end
 
   def deep_clean_pdf(input_file, output_file)
@@ -119,10 +119,9 @@ class CompletePDFCleaner
   private
 
   def create_output_folder
-    timestamp = Time.now.strftime("%Y%m%d_%H%M%S")
-    output_folder = File.join(Dir.pwd, "PDFs_limpios_#{timestamp}")
-    FileUtils.mkdir_p(output_folder)
-    @logger.info("Carpeta de salida creada: #{output_folder}")
+    output_folder = File.join(Dir.pwd, "PDFs_limpios")
+    FileUtils.mkdir_p(output_folder) unless Dir.exist?(output_folder)
+    @logger.info("Usando carpeta de salida: #{output_folder}")
     output_folder
   end
 
