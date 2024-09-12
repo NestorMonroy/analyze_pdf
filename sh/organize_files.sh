@@ -1,28 +1,28 @@
 #!/bin/bash
 
-# Configuración de categorías y patrones
+# Configuración de categorías y patrones con regex mejoradas
 declare -A categories
 categories=(
-    ["BigData"]="big.*data"
-    ["IA_MachineLearning"]="inteligencia.*artificial|machine.*learning"
-    ["IngenieriaSoftware"]="ingenieria.*software|desarrollo"
-    ["ArquitecturaSoftware"]="arquitectura.*software"
-    ["SeguridadInformatica"]="seguridad|ciberseguridad"
-    ["Metodologias/Scrum"]="scrum"
-    ["Metodologias/PRINCE2"]="prince2"
-    ["Metodologias/RUP"]="rup"
-    ["Metodologias/Agiles"]="agil"
-    ["Estadistica"]="estadistica|probabilidad"
-    ["Programacion"]="programacion"
-    ["Redes"]="redes|sistemas.*distribuidos"
-    ["UML_Modelado"]="uml|modelado"
-    ["GestionProyectos"]="gestion.*proyectos"
-    ["InformaticaGeneral"]="informatica"
-    ["Psicologia_Neurociencia"]="psicologia|neurociencia"
-    ["Idiomas"]="ingles|idiomas"
-    ["ISO_Normativas"]="iso|normativas"
-    ["CasosEstudio"]="caso.*estudio"
-    ["Tesis_TrabajosAcademicos"]="tesis|tfg"
+    ["BigData"]="(?i)(big[ _-]?data|datos[ _-]?masivos)"
+    ["IA_MachineLearning"]="(?i)(inteligencia[ _-]?artificial|machine[ _-]?learning|ai[ _-]?for[ _-]?big[ _-]?data)"
+    ["IngenieriaSoftware"]="(?i)(ingenieria[ _-]?(?:de[ _-]?)?software|desarrollo[ _-]?(?:de[ _-]?)?software)"
+    ["ArquitecturaSoftware"]="(?i)(arquitectura[ _-]?(?:de[ _-]?)?software|software[ _-]?architecture)"
+    ["SeguridadInformatica"]="(?i)(seguridad|ciberseguridad|cyber[ _-]?security)"
+    ["Metodologias"]="(?i)(scrum|prince2|rup|agil|metodolog[ií]a)"
+    ["Estadistica"]="(?i)(estad[ií]stica|probabilidad)"
+    ["Programacion"]="(?i)(programaci[óo]n|javascript|python)"
+    ["Redes"]="(?i)(redes|sistemas[ _-]?distribuidos|networking)"
+    ["UML_Modelado"]="(?i)(uml|modelado|model(?:ling)?)"
+    ["SysML"]="(?i)sysml"
+    ["GestionProyectos"]="(?i)(gesti[óo]n[ _-]?(?:de[ _-]?)?proyectos|project[ _-]?management)"
+    ["InformaticaGeneral"]="(?i)(inform[áa]tica|computaci[óo]n|computing)"
+    ["Psicologia_Neurociencia"]="(?i)(psicolog[ií]a|neurociencia)"
+    ["Idiomas"]="(?i)(ingl[ée]s|idiomas|language)"
+    ["ISO_Normativas"]="(?i)(iso|normativas?|standards?)"
+    ["CasosEstudio"]="(?i)(caso(?:s)?[ _-]?(?:de[ _-]?)?estudio|case[ _-]?stud(?:y|ies))"
+    ["Tesis_TrabajosAcademicos"]="(?i)(tesis|tfg|trabajo[ _-]?(?:fin[ _-]?de[ _-]?)?grado)"
+    ["AWS"]="(?i)aws"
+    ["Empresarial"]="(?i)(business|negocio|empresa)"
 )
 
 # Función para crear directorios
@@ -33,15 +33,14 @@ create_directories() {
     done
 }
 
-# Función para mover o copiar archivos
-process_files() {
+# Función para mover archivos
+move_files() {
     local base_dir="$1"
-    local mode="$2"
     local log_file="$base_dir/organize_files.log"
     
     echo "Iniciando organización de archivos en $base_dir" > "$log_file"
     
-    find "$base_dir" -type f | while read -r file; do
+    find "$base_dir" -maxdepth 1 -type f | while read -r file; do
         filename=$(basename "$file")
         moved=false
         
@@ -51,13 +50,8 @@ process_files() {
                 if [ -f "$target" ]; then
                     echo "CONFLICTO: $filename ya existe en $dir" >> "$log_file"
                 else
-                    if [ "$mode" = "copy" ]; then
-                        cp "$file" "$target"
-                        echo "COPIADO: $filename a $dir" >> "$log_file"
-                    else
-                        mv "$file" "$target"
-                        echo "MOVIDO: $filename a $dir" >> "$log_file"
-                    fi
+                    mv "$file" "$target"
+                    echo "MOVIDO: $filename a $dir" >> "$log_file"
                     moved=true
                     break
                 fi
@@ -74,20 +68,7 @@ process_files() {
 
 # Función principal
 main() {
-    local OPTIND opt
-    local target_dir=""
-    local mode="move"
-    local simulate=false
-
-    while getopts ":d:csm" opt; do
-        case $opt in
-            d) target_dir="$OPTARG" ;;
-            c) mode="copy" ;;
-            s) simulate=true ;;
-            m) mode="move" ;;
-            \?) echo "Opción inválida: -$OPTARG" >&2; return 1 ;;
-        esac
-    done
+    local target_dir="$1"
 
     if [ -z "$target_dir" ]; then
         echo "Uso: $0 -d <directorio> [-c para copiar] [-m para mover] [-s para simular]"
@@ -108,5 +89,5 @@ main() {
     fi
 }
 
-# Llamar a la función principal con todos los argumentos pasados al script
-main "$@"
+# Llamar a la función principal con el argumento pasado al script
+main "$1"
