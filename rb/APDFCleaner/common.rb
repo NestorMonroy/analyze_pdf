@@ -2,27 +2,28 @@ require_relative 'utils'
 
 module Common
   class PDFProcessor
-    def initialize(logger)
+    def initialize(logger, verbose = false)
       @logger = logger
+      @verbose = verbose
       @step_hashes = {}
     end
 
     protected
 
     def log_debug(message)
-      @logger.debug(message)
+      @logger.debug(message) if @verbose
     end
 
     def log_info(message)
-      @logger.info(message)
+      @logger.info(message) if @verbose
     end
 
     def log_warn(message)
-      @logger.warn(message)
+      @logger.warn(message) if @verbose
     end
 
     def log_error(message)
-      @logger.error(message)
+      @logger.error(message) if @verbose
     end
 
     def step_necessary?(input_file, method_name)

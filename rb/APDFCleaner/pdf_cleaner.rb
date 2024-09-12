@@ -20,12 +20,13 @@ class PDFCleaner < Common::PDFProcessor
       decompress_and_clean(doc)
       selective_stream_removal(doc)
       analyze_and_remove_actions(doc)
-      preserve_content(doc)
+      rebuild_document(doc)
 
       doc.write(output_file, optimize: true)
       ensure_output_file_created(output_file)
       log_document_info(HexaPDF::Document.open(output_file), "Después de la limpieza")
     end
+    
   end
 
   private
@@ -47,8 +48,8 @@ class PDFCleaner < Common::PDFProcessor
   def decompress_and_clean(doc)
     @logger.info("Descomprimiendo y limpiando objetos")
     decompressed_count = 0
-    doc.each(only_current: false) do |obj|
-      if obj.kind_of?(HexaPDF::Stream) && stream_compressed?(obj)
+    doc.each do |obj|
+      if obj.is_a?(HexaPDF::Stream) && stream_compressed?(obj)
         begin
           obj.stream
           decompressed_count += 1

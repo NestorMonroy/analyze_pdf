@@ -11,10 +11,11 @@ class AdvancedPDFCleaner
     log_file = File.join(Dir.pwd, "pdf_cleaner_log.txt")
     @logger = Utils.create_logger(log_file, options[:verbose])
     @output_folder = Utils.create_output_folder(Dir.pwd, options[:output_folder] || "PDFs_limpios_avanzado")
-    @analyzer = PDFAnalyzer.new(@logger)
-    @cleaner = PDFCleaner.new(@logger)
-    @external_cleaner = ExternalToolCleaner.new(@logger)
-    @risk_checker = RiskChecker.new(@logger)
+    @analyzer = PDFAnalyzer.new(@logger, options[:verbose])
+    @cleaner = PDFCleaner.new(@logger, options[:verbose])
+    @external_cleaner = ExternalToolCleaner.new(@logger, options[:verbose])
+    @risk_checker = RiskChecker.new(@logger, options[:verbose])
+   
    
     check_permissions
   end
