@@ -23,11 +23,25 @@ module PDFRebuilder
         new_contents = deep_copy_object(old_page[:Contents], new_doc)
         if new_contents.is_a?(HexaPDF::Dictionary)
           @logger.info("  Página #{index + 1}: Convirtiendo Dictionary a Stream")
-          stream = new_doc.add({Type: :XObject, Subtype: :Form})
-          stream.stream = decompress_flate(new_contents)
+          stream = new_doc.add({Type: :XObject, Subtype: :Form, BBox: old_page[:MediaBox] || [0, 0, 612, 792]})
+          stream.stream = decompress_flate(new_contents) || ''
           new_page[:Contents] = stream
-        else
+        elsif new_contents.is_a?(HexaPDF::PDFArray)
+          @logger.info("  Página #{index + 1}: Procesando PDFArray")
+          new_page[:Contents] = new_contents.map do |item|
+            if item.is_a?(HexaPDF::Stream)
+              item
+            else
+              stream = new_doc.add({Type: :XObject, Subtype: :Form, BBox: old_page[:MediaBox] || [0, 0, 612, 792]})
+              stream.stream = decompress_flate(item) || ''
+              stream
+            end
+          end
+        elsif new_contents.is_a?(HexaPDF::Stream)
           new_page[:Contents] = new_contents
+        else
+          @logger.warn("  Página #{index + 1}: Tipo de contenido inesperado: #{new_contents.class}")
+          new_page[:Contents] = new_doc.add({Type: :XObject, Subtype: :Form, BBox: old_page[:MediaBox] || [0, 0, 612, 792]})
         end
         @logger.info("  Página #{index + 1}: Contenido copiado")
       else
@@ -55,25 +69,21 @@ module PDFRebuilder
   def deep_copy_object(obj, new_doc)
     case obj
     when HexaPDF::Dictionary
-      if obj[:Type] == :XObject && obj[:Subtype] == :Form
-        # Este es un caso especial donde el Dictionary debería ser un Stream
-        new_stream = new_doc.add({Type: :XObject, Subtype: :Form})
-        obj.each do |key, value|
-          new_stream[key] = deep_copy_object(value, new_doc) unless key == :Length
-        end
-        new_stream.stream = obj.value[:Length] ? obj.document.object(obj).stream : ''
-        new_stream
-      else
-        new_dict = new_doc.add({})
-        obj.each do |key, value|
-          new_dict[key] = deep_copy_object(value, new_doc)
-        end
-        new_dict
+      new_dict = new_doc.add({})
+      obj.each do |key, value|
+        new_dict[key] = deep_copy_object(value, new_doc)
       end
+      if new_dict[:Type] == :XObject && new_dict[:Subtype] == :Form && !new_dict.key?(:BBox)
+        new_dict[:BBox] = [0, 0, 612, 792]  # Valor predeterminado
+      end
+      new_dict
     when HexaPDF::Stream
       new_stream = new_doc.add({})
       obj.value.each do |key, value|
         new_stream[key] = deep_copy_object(value, new_doc)
+      end
+      if new_stream[:Type] == :XObject && new_stream[:Subtype] == :Form && !new_stream.key?(:BBox)
+        new_stream[:BBox] = [0, 0, 612, 792]  # Valor predeterminado
       end
       new_stream.stream = obj.stream.dup
       new_stream
@@ -101,36 +111,49 @@ module PDFRebuilder
   end
 
   def decompress_flate(obj)
-    if obj.is_a?(HexaPDF::Dictionary) && obj[:Filter] == :FlateDecode && obj[:Length].is_a?(Integer)
-      begin
-        stream_obj = obj.document.object(obj)
-        if stream_obj.is_a?(HexaPDF::Stream)
-          Zlib::Inflate.inflate(stream_obj.stream)
-        else
-          @logger.warn("No se pudo obtener el stream del objeto")
+    case obj
+    when HexaPDF::Dictionary
+      if obj[:Filter] == :FlateDecode && obj[:Length].is_a?(Integer)
+        begin
+          stream_obj = obj.document.object(obj)
+          if stream_obj.is_a?(HexaPDF::Stream)
+            Zlib::Inflate.inflate(stream_obj.stream)
+          else
+            @logger.warn("No se pudo obtener el stream del objeto: #{obj.oid}")
+            ''
+          end
+        rescue Zlib::DataError => e
+          @logger.error("Error al descomprimir stream del objeto #{obj.oid}: #{e.message}")
+          ''
+        rescue => e
+          @logger.error("Error inesperado al descomprimir objeto #{obj.oid}: #{e.message}")
           ''
         end
-      rescue Zlib::DataError => e
-        @logger.error("Error al descomprimir stream: #{e.message}")
-        ''
-      rescue => e
-        @logger.error("Error inesperado al descomprimir: #{e.message}")
+      else
+        @logger.warn("Objeto Dictionary sin FlateDecode o Length inválido: #{obj.oid}")
         ''
       end
-    elsif obj.is_a?(HexaPDF::Stream) && obj[:Filter] == :FlateDecode
-      begin
-        Zlib::Inflate.inflate(obj.stream)
-      rescue Zlib::DataError => e
-        @logger.error("Error al descomprimir stream: #{e.message}")
-        ''
-      rescue => e
-        @logger.error("Error inesperado al descomprimir: #{e.message}")
-        ''
+    when HexaPDF::Stream
+      if obj[:Filter] == :FlateDecode
+        begin
+          Zlib::Inflate.inflate(obj.stream)
+        rescue Zlib::DataError => e
+          @logger.error("Error al descomprimir stream del objeto #{obj.oid}: #{e.message}")
+          ''
+        rescue => e
+          @logger.error("Error inesperado al descomprimir objeto #{obj.oid}: #{e.message}")
+          ''
+        end
+      else
+        @logger.warn("Stream sin FlateDecode: #{obj.oid}")
+        obj.stream
       end
     else
-      obj.is_a?(HexaPDF::Stream) ? obj.stream : ''
+      @logger.warn("Tipo de objeto inesperado en decompress_flate: #{obj.class}")
+      obj.is_a?(String) ? obj : ''
     end
   end
+  
 
   def log_document_info(doc, prefix = "Información del documento")
     @logger.info("#{prefix}:")
@@ -161,8 +184,15 @@ module PDFRebuilder
         content = page[:Contents].stream
         @logger.info("  Página #{index + 1}: Contenido (#{content.size} bytes)")
         @logger.debug("    Primeros 100 bytes: #{content[0..100]}")
-      elsif page[:Contents].is_a?(Array)
+      elsif page[:Contents].is_a?(Array) || page[:Contents].is_a?(HexaPDF::PDFArray)
         @logger.info("  Página #{index + 1}: #{page[:Contents].size} streams de contenido")
+        page[:Contents].each_with_index do |stream, i|
+          if stream.is_a?(HexaPDF::Stream)
+            @logger.info("    Stream #{i + 1}: #{stream.stream.size} bytes")
+          else
+            @logger.warn("    Stream #{i + 1}: No es un Stream (#{stream.class})")
+          end
+        end
       elsif page[:Contents].is_a?(HexaPDF::Dictionary)
         @logger.info("  Página #{index + 1}: Contenido es un Dictionary")
         content = decompress_flate(page[:Contents])

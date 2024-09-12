@@ -2,6 +2,7 @@ require_relative 'common'
 require_relative 'utils'
 require 'hexapdf'
 require_relative 'pdf_rebuilder'
+require_relative 'pdf_diagnostics'
 
 class ExternalToolCleaner < Common::PDFProcessor
   include PDFRebuilder
@@ -13,22 +14,31 @@ class ExternalToolCleaner < Common::PDFProcessor
 
   def clean(input_file, output_file)
     return unless Utils.valid_pdf?(input_file)
-  
+
+    @logger.info("Iniciando investigación del proceso de limpieza")
+    PDFDiagnostics.investigate_cleaning_process(input_file, @logger, self)
+
     temp_file = Utils.temp_filename("external_clean")
-    
+   
     safe_process("Limpieza con herramientas externas") do
       begin
         clean_with_qpdf(input_file, temp_file)
         clean_with_pdftk(temp_file, output_file)
         success = clean_with_ghostscript(output_file, output_file)
-        
+       
         unless success
           @logger.warn("Ghostscript falló, usando el resultado de pdftk")
           FileUtils.cp(temp_file, output_file)
         end
-  
+ 
         doc = HexaPDF::Document.open(output_file)
+        @logger.info("Análisis antes de la reconstrucción:")
+        PDFDiagnostics.analyze_document_at_stage("Antes de reconstruir", output_file, @logger)
+        
         doc = rebuild_document(doc)
+        @logger.info("Análisis después de la reconstrucción:")
+        PDFDiagnostics.analyze_document_at_stage("Después de reconstruir", output_file, @logger)
+        
         log_document_info(doc, "Después de reconstruir documento")
         verify_pdf_content(doc)
      
@@ -41,12 +51,13 @@ class ExternalToolCleaner < Common::PDFProcessor
         Utils.delete_file(temp_file)
       end
     end
-  
+ 
     ensure_output_file_created(output_file)
     log_document_info(HexaPDF::Document.open(output_file), "Archivo final")
   end
 
-  private
+  # Hacemos públicos estos métodos
+  public
 
   def clean_with_qpdf(input_file, output_file)
     @logger.info("Limpiando con qpdf: #{input_file}")
