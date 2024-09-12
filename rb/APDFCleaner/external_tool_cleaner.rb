@@ -1,17 +1,21 @@
 require_relative 'common'
 require_relative 'utils'
 require 'hexapdf'
+require_relative 'pdf_rebuilder'
 
 class ExternalToolCleaner < Common::PDFProcessor
+  include PDFRebuilder
+
   def initialize(logger, verbose = false)
     super(logger, verbose)
+    initialize_pdf_rebuilder(logger, verbose)
   end
 
   def clean(input_file, output_file)
     return unless Utils.valid_pdf?(input_file)
     doc = HexaPDF::Document.open(input_file)
     temp_file = Utils.temp_filename("external_clean")
-    
+   
     safe_process("Limpieza con herramientas externas") do
       clean_with_qpdf(input_file, temp_file)
       clean_with_pdftk(temp_file, output_file)
@@ -23,9 +27,8 @@ class ExternalToolCleaner < Common::PDFProcessor
     end
     doc = rebuild_document(doc)
     log_document_info(doc, "Después de reconstruir documento")
-
     verify_pdf_content(doc)
-    
+   
     doc.write(output_file, optimize: true)
     ensure_output_file_created(output_file)
     log_document_info(HexaPDF::Document.open(output_file), "Archivo final")
@@ -52,7 +55,7 @@ class ExternalToolCleaner < Common::PDFProcessor
     @logger.info("Limpiando con pdftk: #{input_file}")
     cmd = "pdftk #{input_file} output #{output_file} flatten"
     success, output = Utils.execute_command(cmd)
-    
+   
     if success
       @logger.info("pdftk completado exitosamente")
     else
@@ -60,8 +63,6 @@ class ExternalToolCleaner < Common::PDFProcessor
       raise "pdftk falló: #{output}"
     end
   end
-
-  # #cmd = "gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.5 -dPDFSETTINGS=/prepress -dDetectDuplicateImages=false -dNOPAUSE -dQUIET -dBATCH -dNOOUTERSAVE -dNOCCITT -sOutputFile=#{output_file} #{input_file}"
 
   def clean_with_ghostscript(input_file, output_file)
     @logger.info("Limpiando con Ghostscript: #{input_file}")
@@ -71,7 +72,6 @@ class ExternalToolCleaner < Common::PDFProcessor
     if success
       @logger.info("Ghostscript completado exitosamente")
      
-      # Verificar que el archivo de salida tiene contenido
       if File.size(output_file) > 0
         doc = HexaPDF::Document.open(output_file)
         if doc.pages.count == 0
@@ -89,5 +89,4 @@ class ExternalToolCleaner < Common::PDFProcessor
       false
     end
   end
-  
 end
