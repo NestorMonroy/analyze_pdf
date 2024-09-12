@@ -43,15 +43,16 @@ module Common
       end
     end
 
-    def safe_process(step_name)
-      log_info("Iniciando paso: #{step_name}")
+    def safe_process(process_name)
+      log_info("Iniciando paso: #{process_name}")
       yield
-      log_info("Paso completado: #{step_name}")
+      log_info("Paso completado: #{process_name}")
     rescue => e
-      log_error("Error en paso #{step_name}: #{e.message}")
+      log_error("Error en paso #{process_name}: #{e.message}")
       log_debug(e.backtrace.join("\n"))
       raise
     end
+    
   end
 
   # Mixin para operaciones comunes de limpieza de PDF

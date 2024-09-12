@@ -2,12 +2,14 @@ require 'hexapdf'
 require "zlib"
 require_relative 'common'
 require_relative 'utils'
+require_relative 'external_tool_cleaner'
 
 class PDFCleaner < Common::PDFProcessor
   include Common::PDFCleanerOperations
 
   def initialize(logger, verbose = false)
     super(logger, verbose)
+    @external_cleaner = ExternalToolCleaner.new(logger, verbose)
   end
 
   def clean(input_file, output_file)
@@ -19,8 +21,19 @@ class PDFCleaner < Common::PDFProcessor
       log_document_info(doc, "Antes de cualquier procesamiento")
       initial_clean(doc)
       log_document_info(doc, "Después de limpieza inicial")
+
+      temp_file1 = Utils.temp_filename("clean_1")
+      temp_file2 = Utils.temp_filename("clean_2")
+
+      doc.write(temp_file1)
+
+      @external_cleaner.clean(temp_file1, temp_file2)
+
+      doc = HexaPDF::Document.open(temp_file2)
+      
       decompress_and_clean(doc)
       log_document_info(doc, "Después de descompresión")
+      
       selective_stream_removal(doc)
       log_document_info(doc, "Después de eliminación de streams")
       
@@ -38,10 +51,38 @@ class PDFCleaner < Common::PDFProcessor
       doc.write(output_file, optimize: true)
       ensure_output_file_created(output_file)
       log_document_info(HexaPDF::Document.open(output_file), "Archivo final")
+
+      # Limpiar archivos temporales
+      [temp_file1, temp_file2].each { |file| File.delete(file) if File.exist?(file) }
     end
   end
 
   private
+
+  def verify_content(file_path, original_page_count)
+    doc = HexaPDF::Document.open(file_path)
+    current_page_count = doc.pages.count
+  
+    if current_page_count < original_page_count
+      @logger.warn("Advertencia: El número de páginas ha disminuido (original: #{original_page_count}, actual: #{current_page_count})")
+      return false
+    end
+  
+    doc.pages.each_with_index do |page, index|
+      if page[:Contents].nil?
+        @logger.warn("  Página #{index + 1} no tiene contenido")
+        return false
+      elsif page[:Contents].is_a?(HexaPDF::Stream) && page[:Contents].stream.empty?
+        @logger.warn("  Página #{index + 1} tiene un stream de contenido vacío")
+        return false
+      elsif page[:Contents].is_a?(Array) && page[:Contents].all? { |obj| obj.is_a?(HexaPDF::Stream) && obj.stream.empty? }
+        @logger.warn("  Página #{index + 1} tiene todos los streams de contenido vacíos")
+        return false
+      end
+    end
+  
+    true
+  end  
 
   def log_document_info(doc, prefix = "Información del documento")
     @logger.info("#{prefix}:")
@@ -178,27 +219,27 @@ class PDFCleaner < Common::PDFProcessor
       else
         @logger.warn("  Página #{index + 1}: Sin contenido para copiar")
       end
+      
       new_page[:Resources] = deep_copy_resources(old_page[:Resources], new_doc)
       new_page[:MediaBox] = old_page[:MediaBox] || [0, 0, 612, 792]  # Tamaño de página por defecto
+      
+      # Copiar otros atributos importantes de la página
+      [:CropBox, :BleedBox, :TrimBox, :ArtBox, :Rotate].each do |key|
+        new_page[key] = old_page[key] if old_page.key?(key)
+      end
+  
       @logger.info("  Página #{index + 1} reconstruida")
     end
-
-    # Reemplazar todas las páginas del documento original con las nuevas páginas
-    while doc.pages.count > 0
-      doc.pages.delete(doc.pages[0])
-    end
-    
-    new_doc.pages.each do |new_page|
-      doc.pages.add(doc.import(new_page))
-    end
-
+  
     # Copiar metadatos y otras propiedades importantes
     [:Info, :ViewerPreferences, :PageLayout, :PageMode].each do |key|
-      doc.catalog[key] = deep_copy_object(new_doc.catalog[key], doc) if new_doc.catalog.key?(key)
+      new_doc.catalog[key] = deep_copy_object(doc.catalog[key], new_doc) if doc.catalog.key?(key)
     end
-
+  
     @logger.info("Documento reconstruido exitosamente")
+    new_doc
   end
+  
 
   def decompress_flate(obj)
     if obj[:Filter] == :FlateDecode && obj[:Length].is_a?(Integer)
