@@ -2,8 +2,8 @@ require_relative 'common'
 require_relative 'utils'
 
 class ExternalToolCleaner < Common::PDFProcessor
-  def initialize(logger)
-    super(logger)
+  def initialize(logger, verbose = false)
+    super(logger, verbose)
   end
 
   def clean(input_file, output_file)
@@ -23,40 +23,40 @@ class ExternalToolCleaner < Common::PDFProcessor
   private
 
   def clean_with_qpdf(input_file, output_file)
-    log_info("Limpiando con qpdf: #{input_file}")
+    @logger.info("Limpiando con qpdf: #{input_file}")
     cmd = "qpdf --linearize --object-streams=disable --remove-unreferenced-resources=yes #{input_file} #{output_file}"
     success, output = Utils.execute_command(cmd)
     
     if success
-      log_info("qpdf completado exitosamente")
+      @logger.info("qpdf completado exitosamente")
     else
-      log_error("Error en qpdf: #{output}")
+      @logger.error("Error en qpdf: #{output}")
       raise "qpdf falló: #{output}"
     end
   end
 
   def clean_with_pdftk(input_file, output_file)
-    log_info("Limpiando con pdftk: #{input_file}")
+    @logger.info("Limpiando con pdftk: #{input_file}")
     cmd = "pdftk #{input_file} output #{output_file} flatten"
     success, output = Utils.execute_command(cmd)
     
     if success
-      log_info("pdftk completado exitosamente")
+      @logger.info("pdftk completado exitosamente")
     else
-      log_error("Error en pdftk: #{output}")
+      @logger.error("Error en pdftk: #{output}")
       raise "pdftk falló: #{output}"
     end
   end
 
   def clean_with_ghostscript(input_file, output_file)
-    log_info("Limpiando con Ghostscript: #{input_file}")
+    @logger.info("Limpiando con Ghostscript: #{input_file}")
     cmd = "gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/default -dNOPAUSE -dQUIET -dBATCH -sOutputFile=#{output_file} #{input_file}"
     success, output = Utils.execute_command(cmd)
     
     if success
-      log_info("Ghostscript completado exitosamente")
+      @logger.info("Ghostscript completado exitosamente")
     else
-      log_error("Error en Ghostscript: #{output}")
+      @logger.error("Error en Ghostscript: #{output}")
       raise "Ghostscript falló: #{output}"
     end
   end

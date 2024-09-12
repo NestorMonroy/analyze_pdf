@@ -1,17 +1,6 @@
-require 'logger'
 require_relative 'utils'
 
 module Common
-  # Crea y configura un logger consistente
-  def self.create_logger(log_file = STDOUT)
-    logger = Logger.new(log_file)
-    logger.formatter = proc do |severity, datetime, progname, msg|
-      "[#{datetime.strftime('%Y-%m-%d %H:%M:%S')}] #{severity}: #{msg}\n"
-    end
-    logger
-  end
-
-  # Clase base para procesadores de PDF
   class PDFProcessor
     def initialize(logger)
       @logger = logger
@@ -20,22 +9,26 @@ module Common
 
     protected
 
-    def log_info(message)
-      @logger.info(message)
+    def log_debug(message)
+      @logger.debug(message)
     end
 
-    def log_error(message)
-      @logger.error(message)
+    def log_info(message)
+      @logger.info(message)
     end
 
     def log_warn(message)
       @logger.warn(message)
     end
 
+    def log_error(message)
+      @logger.error(message)
+    end
+
     def step_necessary?(input_file, method_name)
       current_hash = Utils.file_hash(input_file)
       if @step_hashes[method_name] == current_hash
-        log_info("Paso #{method_name} omitido: no es necesario")
+        log_debug("Paso #{method_name} omitido: no es necesario")
         false
       else
         @step_hashes[method_name] = current_hash
@@ -55,7 +48,7 @@ module Common
       log_info("Paso completado: #{step_name}")
     rescue => e
       log_error("Error en paso #{step_name}: #{e.message}")
-      log_error(e.backtrace.join("\n"))
+      log_debug(e.backtrace.join("\n"))
       raise
     end
   end
@@ -65,7 +58,7 @@ module Common
     def remove_item_from_pages(doc, item_key)
       doc.pages.each_with_index do |page, index|
         if page.key?(item_key)
-          log_info("  Eliminando #{item_key} de la página #{index + 1}")
+          log_debug("  Eliminando #{item_key} de la página #{index + 1}")
           page.delete(item_key)
         end
       end
@@ -74,10 +67,15 @@ module Common
     def remove_items_from_catalog(doc, items)
       items.each do |item|
         if doc.catalog.key?(item)
-          log_info("  Eliminando #{item} del catálogo")
+          log_debug("  Eliminando #{item} del catálogo")
           doc.catalog.delete(item)
         end
       end
     end
+  end
+
+  def self.check_permissions(output_folder, external_tools)
+    Utils.check_write_permissions(output_folder)
+    Utils.check_external_tools(*external_tools)
   end
 end

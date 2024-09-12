@@ -3,8 +3,8 @@ require_relative 'common'
 require_relative 'utils'
 
 class RiskChecker < Common::PDFProcessor
-  def initialize(logger)
-    super(logger)
+  def initialize(logger, verbose = false)
+    super(logger, verbose)
     @risk_factors = []
   end
 
@@ -26,7 +26,7 @@ class RiskChecker < Common::PDFProcessor
   private
 
   def check_catalog_risks(doc)
-    log_info("Verificando riesgos en el catálogo")
+    @logger.info("Verificando riesgos en el catálogo")
     risky_keys = [:Names, :OpenAction, :AA, :AcroForm, :JavaScript, :JS, :Outlines]
     risky_keys.each do |key|
       if doc.catalog.key?(key)
@@ -36,7 +36,7 @@ class RiskChecker < Common::PDFProcessor
   end
 
   def check_page_risks(doc)
-    log_info("Verificando riesgos en las páginas")
+    @logger.info("Verificando riesgos en las páginas")
     doc.pages.each_with_index do |page, index|
       [:Annots, :AA, :JS].each do |key|
         if page.key?(key)
@@ -47,7 +47,7 @@ class RiskChecker < Common::PDFProcessor
   end
 
   def check_stream_risks(doc)
-    log_info("Verificando riesgos en streams")
+    @logger.info("Verificando riesgos en streams")
     doc.each do |obj|
       if obj.is_a?(HexaPDF::Stream)
         stream_data = obj.stream
@@ -59,7 +59,7 @@ class RiskChecker < Common::PDFProcessor
   end
 
   def check_metadata_risks(doc)
-    log_info("Verificando riesgos en metadatos")
+    @logger.info("Verificando riesgos en metadatos")
     if doc.trailer.key?(:Info)
       info = doc.trailer[:Info]
       suspicious_keys = [:Creator, :Producer, :Author, :Title, :Subject, :Keywords]
@@ -73,16 +73,16 @@ class RiskChecker < Common::PDFProcessor
 
   def add_risk(description)
     @risk_factors << description
-    log_warn(description)
+    @logger.warn(description)
   end
 
   def report_risks
     if @risk_factors.empty?
-      log_info("No se detectaron factores de riesgo en el archivo final.")
+      @logger.info("No se detectaron factores de riesgo en el archivo final.")
     else
-      log_warn("Se detectaron los siguientes factores de riesgo:")
+      @logger.warn("Se detectaron los siguientes factores de riesgo:")
       @risk_factors.each_with_index do |risk, index|
-        log_warn("  #{index + 1}. #{risk}")
+        @logger.warn("  #{index + 1}. #{risk}")
       end
     end
   end

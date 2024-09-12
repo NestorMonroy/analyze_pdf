@@ -1,8 +1,72 @@
 require 'fileutils'
 require 'digest'
 require 'open3'
+require 'logger'
+require 'colorize'
 
 module Utils
+  class AdvancedLogger
+    SEVERITY_COLORS = {
+      DEBUG: :light_blue,
+      INFO: :green,
+      WARN: :yellow,
+      ERROR: :red,
+      FATAL: :red
+    }
+
+    def initialize(log_file = nil, verbose = false)
+      @loggers = []
+      @verbose = verbose
+
+      # Logger para la consola
+      @loggers << Logger.new(STDOUT)
+
+      # Logger para el archivo si se proporciona
+      if log_file
+        FileUtils.mkdir_p(File.dirname(log_file))
+        @loggers << Logger.new(log_file)
+      end
+
+      @loggers.each do |logger|
+        logger.formatter = proc do |severity, datetime, progname, msg|
+          color = SEVERITY_COLORS[severity.to_sym] || :default
+          formatted_msg = "[#{datetime.strftime('%Y-%m-%d %H:%M:%S')}] #{severity}: #{msg}\n"
+          severity == "DEBUG" ? formatted_msg : formatted_msg.colorize(color)
+        end
+      end
+    end
+
+    def debug(message)
+      log('DEBUG', message) if @verbose
+    end
+
+    def info(message)
+      log('INFO', message)
+    end
+
+    def warn(message)
+      log('WARN', message)
+    end
+
+    def error(message)
+      log('ERROR', message)
+    end
+
+    def fatal(message)
+      log('FATAL', message)
+    end
+
+    private
+
+    def log(severity, message)
+      @loggers.each { |logger| logger.send(severity.downcase, message) }
+    end
+  end
+
+  def self.create_logger(log_file = nil, verbose = false)
+    AdvancedLogger.new(log_file, verbose)
+  end
+
   # Crea una carpeta de salida si no existe
   def self.create_output_folder(base_dir, folder_name)
     output_folder = File.join(base_dir, folder_name)
@@ -50,5 +114,42 @@ module Utils
   # Genera un nombre de archivo temporal
   def self.temp_filename(prefix = 'temp', suffix = '.pdf')
     "#{prefix}_#{Time.now.to_i}#{suffix}"
+  end
+
+  def self.check_write_permissions(directory)
+    unless File.writable?(directory)
+      raise "No tienes permisos de escritura en el directorio: #{directory}"
+    end
+  end
+
+  def self.check_external_tools(*tools)
+    missing_tools = tools.reject { |tool| system("which #{tool} > /dev/null 2>&1") }
+    unless missing_tools.empty?
+      raise "Las siguientes herramientas no están instaladas o no son ejecutables: #{missing_tools.join(', ')}"
+    end
+  end
+
+  def self.check_read_permissions(file)
+    unless File.readable?(file)
+      raise "No tienes permisos de lectura para el archivo: #{file}"
+    end
+  end
+
+  def self.check_permissions(output_folder, external_tools)
+    check_write_permissions(output_folder)
+    check_external_tools(*external_tools)
+  end
+
+  def self.validate_pdf_file(file)
+    unless File.file?(file)
+      raise "#{file} no es un archivo."
+    end
+    check_read_permissions(file)
+    unless File.extname(file).downcase == '.pdf'
+      raise "#{file} no es un archivo PDF."
+    end
+    unless valid_pdf?(file)
+      raise "#{file} no es un PDF válido."
+    end
   end
 end
