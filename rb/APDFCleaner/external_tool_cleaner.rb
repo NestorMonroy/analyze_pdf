@@ -13,26 +13,37 @@ class ExternalToolCleaner < Common::PDFProcessor
 
   def clean(input_file, output_file)
     return unless Utils.valid_pdf?(input_file)
-    doc = HexaPDF::Document.open(input_file)
+  
     temp_file = Utils.temp_filename("external_clean")
-   
+    
     safe_process("Limpieza con herramientas externas") do
-      clean_with_qpdf(input_file, temp_file)
-      clean_with_pdftk(temp_file, output_file)
-      success = clean_with_ghostscript(output_file, output_file)
-      unless success
-        @logger.warn("Ghostscript falló, usando el resultado de pdftk")
-        FileUtils.cp(temp_file, output_file)
+      begin
+        clean_with_qpdf(input_file, temp_file)
+        clean_with_pdftk(temp_file, output_file)
+        success = clean_with_ghostscript(output_file, output_file)
+        
+        unless success
+          @logger.warn("Ghostscript falló, usando el resultado de pdftk")
+          FileUtils.cp(temp_file, output_file)
+        end
+  
+        doc = HexaPDF::Document.open(output_file)
+        doc = rebuild_document(doc)
+        log_document_info(doc, "Después de reconstruir documento")
+        verify_pdf_content(doc)
+     
+        doc.write(output_file, optimize: true)
+      rescue => e
+        @logger.error("Error durante el proceso de limpieza: #{e.message}")
+        @logger.error(e.backtrace.join("\n"))
+        FileUtils.cp(input_file, output_file)
+      ensure
+        Utils.delete_file(temp_file)
       end
     end
-    doc = rebuild_document(doc)
-    log_document_info(doc, "Después de reconstruir documento")
-    verify_pdf_content(doc)
-   
-    doc.write(output_file, optimize: true)
+  
     ensure_output_file_created(output_file)
     log_document_info(HexaPDF::Document.open(output_file), "Archivo final")
-    Utils.delete_file(temp_file)
   end
 
   private
